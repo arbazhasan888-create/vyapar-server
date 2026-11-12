@@ -35,8 +35,8 @@ def purge_rooms():
 
 
 class Room:
-    def __init__(self, code, max_players):
-        self.code, self.max = code, max_players
+    def __init__(self, code, max_players, auction=True):
+        self.code, self.max, self.auction = code, max_players, auction      # auction: room setting chosen by the creator
         self.members = {}      # pid -> {"name", "ws"}
         self.host = None
         self.colors = {}        # pid -> token colour chosen in the lobby (host can change anyone's)
@@ -46,7 +46,7 @@ class Room:
         self.last_voice = {}    # pid -> time of the last voice message (flood guard)
 
     def lobby(self):
-        return dict(type="lobby", code=self.code, host=self.host, max=self.max,
+        return dict(type="lobby", code=self.code, host=self.host, max=self.max, auction=self.auction,
                     players=[dict(id=k, name=v["name"], color=self.colors.get(k)) for k, v in self.members.items()])
 
     def start_msg(self):
@@ -76,7 +76,7 @@ def health():
 
 
 @app.post("/create")
-def create(max_players: int = 4):
+def create(max_players: int = 4, auction: bool = True):
     purge_rooms()
     if not MIN_PLAYERS <= max_players <= MAX_PLAYERS:
         raise HTTPException(400, f"max_players must be {MIN_PLAYERS}-{MAX_PLAYERS}")
@@ -85,7 +85,7 @@ def create(max_players: int = 4):
         code = "".join(random.choice(alphabet) for _ in range(5))
         if code not in rooms:
             break
-    rooms[code] = Room(code, max_players)
+    rooms[code] = Room(code, max_players, auction)
     return {"code": code}
 
 
@@ -137,7 +137,7 @@ async def ws_endpoint(ws: WebSocket, code: str, pid: str, name: str = "खिल
                 elif len(room.members) < MIN_PLAYERS:
                     await ws.send_json(err("at_least", min=MIN_PLAYERS))
                 elif not room.game:
-                    room.game = Game([(k, v["name"]) for k, v in room.members.items()], colors=room.colors)
+                    room.game = Game([(k, v["name"]) for k, v in room.members.items()], colors=room.colors, auction=room.auction)
                     await room.broadcast(room.start_msg())
             elif kind == "set_color":
                 target, color = data.get("pid"), data.get("color")

@@ -1,23 +1,41 @@
-"""Original Chance / Chest cards (own text, not copied from any board game)."""
+"""Luck and Fortune cards of the Business India Edition board.
 
-CHANCE = [
-    dict(text="सीधे GO पर जाओ और ₹200 लो।", en="Go straight to GO and collect ₹200.", kind="move_to", value=0),
-    dict(text="मुंबई की यात्रा करो। रास्ते में GO पार करो तो ₹200 लो।", en="Take a trip to Mumbai. If you pass GO, collect ₹200.", kind="move_to", value=39),
-    dict(text="पटना घूमने जाओ।", en="Go sightseeing in Patna.", kind="move_to", value=13),
-    dict(text="3 कदम पीछे जाओ।", en="Move back 3 spaces.", kind="move_rel", value=-3),
-    dict(text="सीधे जेल जाओ!", en="Go straight to jail!", kind="jail", value=0),
-    dict(text="तेज़ गाड़ी चलाने का जुर्माना ₹50।", en="Speeding fine: pay ₹50.", kind="money", value=-50),
-    dict(text="शेयर बाज़ार से ₹150 का लाभ।", en="Stock market profit: collect ₹150.", kind="money", value=150),
-    dict(text="जेल से छुट्टी कार्ड (अपने पास रखो)।", en="Get Out of Jail card (keep it).", kind="jail_free", value=0),
-    dict(text="हर खिलाड़ी को ₹25 दो।", en="Pay every player ₹25.", kind="pay_each", value=25),
+When a token lands on a Luck / Fortune tile the player's two dice are rolled once more and the total (2..12)
+decides which line of the card applies - the same table that is printed in the middle of the board.
+Index 0 of each list is the line for a total of 2, index 10 the line for 12.
+
+kind / value:
+    money         +value from the bank, -value to the bank
+    collect_each  collect `value` from every other player
+    collect_one   collect `value` from one other player (the richest one)
+    repairs       value = (per house, per hotel), paid to the bank
+    holiday       pay `value` to the bank
+    jail          go to jail
+"""
+
+LUCK = [
+    dict(text="क्विज़ प्रतियोगिता जीती! बैंक से ₹500 लो।", en="You have won a Quiz Competition, collect ₹500 from the bank.", kind="money", value=500),
+    dict(text="आग से नुकसान, बैंक को ₹1000 दो।", en="Loss due to fire, pay ₹1000 to the bank.", kind="money", value=-1000),
+    dict(text="वर्ष के निर्यातक का पुरस्कार, बैंक से ₹1500 लो।", en="Prize for Exporter of the Year, collect ₹1500 from the bank.", kind="money", value=1500),
+    dict(text="शेयर बाज़ार में नुकसान, बैंक को ₹1250 दो।", en="Loss in Share Market, pay ₹1250 to the bank.", kind="money", value=-1250),
+    dict(text="आपका जन्मदिन है, हर खिलाड़ी से ₹250 लो।", en="It is your birthday, collect ₹250 from each player.", kind="collect_each", value=250),
+    dict(text="पुलिस ने जुर्माना किया, बैंक को ₹500 दो।", en="Fined by Police, pay ₹500 to the bank.", kind="money", value=-500),
+    dict(text="शेयरों पर लाभांश मिला, बैंक से ₹1000 लो।", en="Receive dividend on Shares, collect ₹1000 from the bank.", kind="money", value=1000),
+    dict(text="इलाज का बिल, बैंक को ₹750 दो।", en="Pay Medical Bill ₹750 to the bank.", kind="money", value=-750),
+    dict(text="कॉपीराइट उल्लंघन पर मुकदमा, किसी एक खिलाड़ी से ₹750 लो।", en="Sue for copyright infringement, collect ₹750 from any player.", kind="collect_one", value=750),
+    dict(text="जेल जाओ।", en="Go to Jail.", kind="jail", value=0),
+    dict(text="दिया हुआ कर्ज़ वापस मिला, बैंक से ₹1250 लो।", en="Loan given received back, collect ₹1250 from the bank.", kind="money", value=1250),
 ]
-CHEST = [
-    dict(text="बैंक की भूल से ₹200 मिले।", en="Bank error in your favour: collect ₹200.", kind="money", value=200),
-    dict(text="डॉक्टर की फ़ीस ₹50 दो।", en="Doctor's fee: pay ₹50.", kind="money", value=-50),
-    dict(text="जन्मदिन! हर खिलाड़ी से ₹10 लो।", en="It's your birthday! Collect ₹10 from every player.", kind="collect_each", value=10),
-    dict(text="स्कूल की फ़ीस ₹100 दो।", en="School fees: pay ₹100.", kind="money", value=-100),
-    dict(text="पुरानी बीमा राशि ₹100 मिली।", en="Old insurance matured: collect ₹100.", kind="money", value=100),
-    dict(text="जेल से छुट्टी कार्ड (अपने पास रखो)।", en="Get Out of Jail card (keep it).", kind="jail_free", value=0),
-    dict(text="सीधे जेल जाओ!", en="Go straight to jail!", kind="jail", value=0),
-    dict(text="दिवाली बोनस ₹75 मिला।", en="Diwali bonus: collect ₹75.", kind="money", value=75),
+FORTUNE = [
+    dict(text="कर्ज़ पर ब्याज, बैंक को ₹1000 दो।", en="Pay Interest on Loan ₹1000 to the bank.", kind="money", value=-1000),
+    dict(text="लॉटरी जीती, बैंक से ₹1250 लो।", en="Win the Lottery, collect ₹1250 from the bank.", kind="money", value=1250),
+    dict(text="जेल जाओ।", en="Go to Jail.", kind="jail", value=0),
+    dict(text="आयकर रिफ़ंड, बैंक से ₹1000 लो।", en="Collect Income Tax Refund ₹1000 from the bank.", kind="money", value=1000),
+    dict(text="बच्चे की स्कूल फ़ीस, बैंक को ₹1250 दो।", en="Pay child's School Fees ₹1250 to the bank.", kind="money", value=-1250),
+    dict(text="शादी का तोहफ़ा मिला, हर खिलाड़ी से ₹500 लो।", en="Received Wedding Gift ₹500 from Each player.", kind="collect_each", value=500),
+    dict(text="मरम्मत: हर मकान के ₹50, हर होटल के ₹100 दो।", en="Make repairs: Each House ₹50, Each Hotel ₹100.", kind="repairs", value=(50, 100)),
+    dict(text="त्योहार बोनस, बैंक से ₹1000 लो।", en="Receive Festival Bonus ₹1000 from the bank.", kind="money", value=1000),
+    dict(text="बीमा प्रीमियम, बैंक को ₹500 दो।", en="Pay Insurance Premium ₹500 to the bank.", kind="money", value=-500),
+    dict(text="फिक्स्ड डिपॉजिट पर ब्याज, बैंक से ₹750 लो।", en="Interest earned on Fixed Deposit, Collect ₹750 from the bank.", kind="money", value=750),
+    dict(text="छुट्टी पर जाओ, बैंक को ₹3000 दो।", en="Go to a Holiday, pay ₹3000 to the bank.", kind="holiday", value=3000),
 ]

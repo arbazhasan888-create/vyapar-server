@@ -8,29 +8,29 @@ change language the moment the player switches it (old lines included).
 Parameter conventions
     name / owner / other / p1 / p2 : player ids   -> replaced by the player's display name
     tile                           : tile index   -> replaced by the city name in the chosen language
-    deck + ci                      : "chance"|"chest" + card index -> deck name and card text
+    deck + ci                      : "luck"|"fortune" + card index (dice total - 2) -> deck name and card text
 """
 from .board import TILES
-from .cards import CHANCE, CHEST
+from .cards import LUCK, FORTUNE
 
 LANGS = ("hi", "en")
 DEFAULT_LANG = "hi"
 
 PLAYER_KEYS = ("name", "owner", "other", "p1", "p2")
 
-DECK_NAMES = {"hi": {"chance": "अवसर", "chest": "किस्मत"},
-              "en": {"chance": "Chance", "chest": "Luck"}}
-DECK_CARDS = {"chance": CHANCE, "chest": CHEST}
+DECK_NAMES = {"hi": {"luck": "किस्मत", "fortune": "भाग्य"},
+              "en": {"luck": "Luck", "fortune": "Fortune"}}
+DECK_CARDS = {"luck": LUCK, "fortune": FORTUNE}
 
 LOG = {
     "hi": {
         "start": "खेल शुरू! पहली बारी: {name}",
         "jail": "{name} जेल गया!",
-        "go": "{name} को GO का ₹{amt} मिला।",
+        "go": "{name} को स्टार्ट पार करने पर ₹{amt} मिला।",
         "arrive": "{name} पहुँचा: {tile}",
         "rent": "{name} ने {owner} को {tile} का ₹{amt} किराया दिया।",
         "tax": "{name} ने ₹{amt} टैक्स दिया।",
-        "card": "{name} ने {deck} कार्ड उठाया: {card}",
+        "card": "{name} ने {deck} कार्ड उठाया (पासा {roll}): {card}",
         "roll": "{name} ने पासा फेंका: {d1} + {d2}",
         "jail_double": "{name} डबल लाकर जेल से छूटा।",
         "jail_auto": "3 बारी पूरी: ₹{amt} जुर्माना देकर छूटे।",
@@ -40,7 +40,9 @@ LOG = {
         "pay_jail": "{name} ने ₹{amt} देकर जेल छोड़ी।",
         "use_card": "{name} ने छुट्टी कार्ड इस्तेमाल किया।",
         "build": "{name} ने {tile} में मकान बनाया (कुल {n})।",
+        "build_hotel": "{name} ने {tile} में होटल बनाया!",
         "sell": "{name} ने {tile} का मकान बेचा।",
+        "sell_hotel": "{name} ने {tile} का होटल बेचा।",
         "mortgage": "{name} ने {tile} गिरवी रखा।",
         "redeem": "{name} ने {tile} छुड़ाया।",
         "bankrupt": "{name} दिवालिया हो गया!",
@@ -48,15 +50,21 @@ LOG = {
         "trade_offer": "{name} ने {other} को सौदा भेजा।",
         "trade_done": "{p1} और {p2} का सौदा पक्का!",
         "trade_cancel": "सौदा रद्द हुआ।",
+        "auction_start": "{name} ने {tile} नहीं खरीदा: नीलामी शुरू! (दाम ₹{price})",
+        "auction_bid": "{name} ने {tile} पर ₹{amt} की बोली लगाई।",
+        "auction_pass": "{name} ने बोली छोड़ी।",
+        "auction_won": "{name} ने नीलामी में {tile} ₹{price} में जीता।",
+        "auction_none": "{tile} पर किसी ने बोली नहीं लगाई।",
+        "no_buy": "{name} ने {tile} नहीं खरीदा।",
     },
     "en": {
         "start": "Game on! First turn: {name}",
         "jail": "{name} went to jail!",
-        "go": "{name} collected ₹{amt} for passing GO.",
+        "go": "{name} collected ₹{amt} for passing START.",
         "arrive": "{name} landed on {tile}",
         "rent": "{name} paid {owner} ₹{amt} rent for {tile}.",
         "tax": "{name} paid ₹{amt} tax.",
-        "card": "{name} drew a {deck} card: {card}",
+        "card": "{name} drew a {deck} card (dice {roll}): {card}",
         "roll": "{name} rolled {d1} + {d2}",
         "jail_double": "{name} rolled a double and got out of jail.",
         "jail_auto": "3 turns done: paid a ₹{amt} fine and got out.",
@@ -66,7 +74,9 @@ LOG = {
         "pay_jail": "{name} paid ₹{amt} to leave jail.",
         "use_card": "{name} used a Get Out of Jail card.",
         "build": "{name} built a house on {tile} (total {n}).",
+        "build_hotel": "{name} built a hotel on {tile}!",
         "sell": "{name} sold a house on {tile}.",
+        "sell_hotel": "{name} sold the hotel on {tile}.",
         "mortgage": "{name} mortgaged {tile}.",
         "redeem": "{name} redeemed {tile}.",
         "bankrupt": "{name} went bankrupt!",
@@ -74,6 +84,12 @@ LOG = {
         "trade_offer": "{name} sent a deal to {other}.",
         "trade_done": "Deal done between {p1} and {p2}!",
         "trade_cancel": "The deal was cancelled.",
+        "auction_start": "{name} passed on {tile}: auction starts! (price ₹{price})",
+        "auction_bid": "{name} bid ₹{amt} for {tile}.",
+        "auction_pass": "{name} dropped out of the bidding.",
+        "auction_won": "{name} won {tile} at auction for ₹{price}.",
+        "auction_none": "Nobody bid for {tile}.",
+        "no_buy": "{name} did not buy {tile}.",
     },
 }
 
@@ -90,6 +106,8 @@ ERR = {
         "nothing_to_buy": "खरीदने के लिए कुछ नहीं है।",
         "poor": "पैसे कम हैं।",
         "roll_first": "पहले पासा फेंको।",
+        "card_roll_first": "पहले किस्मत/भाग्य के लिए पासा फेंको।",
+        "no_card_roll": "अभी कार्ड के लिए पासा नहीं फेंकना है।",
         "in_debt": "आप कर्ज़ में हैं। संपत्ति गिरवी रखो या दिवालिया घोषित करो।",
         "no_fine_now": "अभी जुर्माना नहीं दे सकते।",
         "card_unusable": "कार्ड अभी इस्तेमाल नहीं हो सकता।",
@@ -111,6 +129,11 @@ ERR = {
         "trade_pending": "पहले से एक सौदा चल रहा है।",
         "no_trade_for_you": "आपके लिए कोई सौदा नहीं है।",
         "no_trade": "कोई सौदा नहीं है।",
+        "auction_busy": "नीलामी चल रही है। पहले बोली पूरी होने दो।",
+        "no_auction": "अभी कोई नीलामी नहीं चल रही।",
+        "not_bidder": "अभी आपकी बोली की बारी नहीं है।",
+        "bad_bid": "बोली की रकम सही नहीं है।",
+        "bid_low": "बोली कम से कम ₹{min} होनी चाहिए।",
         # server
         "room_not_found": "कमरा नहीं मिला।",
         "game_started": "खेल शुरू हो चुका है।",
@@ -131,6 +154,8 @@ ERR = {
         "nothing_to_buy": "There is nothing to buy.",
         "poor": "Not enough money.",
         "roll_first": "Roll the dice first.",
+        "card_roll_first": "Roll the dice for your Luck / Fortune first.",
+        "no_card_roll": "There is no Luck / Fortune dice roll right now.",
         "in_debt": "You are in debt. Mortgage a property or declare bankruptcy.",
         "no_fine_now": "You can't pay the fine right now.",
         "card_unusable": "You can't use the card right now.",
@@ -152,6 +177,11 @@ ERR = {
         "trade_pending": "A deal is already in progress.",
         "no_trade_for_you": "There is no deal for you.",
         "no_trade": "There is no deal.",
+        "auction_busy": "An auction is running. Let the bidding finish first.",
+        "no_auction": "There is no auction right now.",
+        "not_bidder": "It is not your turn to bid.",
+        "bad_bid": "That bid amount is not valid.",
+        "bid_low": "Your bid must be at least ₹{min}.",
         # server
         "room_not_found": "Room not found.",
         "game_started": "The game has already started.",

@@ -1,13 +1,16 @@
 """Game rules for 2-6 players. No UI, no networking: the server calls Game.act()."""
 import random
 
-from .board import TILES, GROUPS, N
-from .cards import CHANCE, CHEST
+from .board import TILES, GROUPS, N, JAIL_POS, STATION_RENT, AIRPORT_RENT_PER_POINT, MAX_HOUSES, HOTEL
+from .cards import LUCK, FORTUNE
 from . import texts
 
 MIN_PLAYERS, MAX_PLAYERS = 2, 6
-START_CASH, GO_SALARY, JAIL_FINE, JAIL_POS = 1500, 200, 50, 10
-TOKEN_COLORS = ["#E53935", "#1E88E5", "#43A047", "#FDD835", "#8E24AA", "#FB8C00"]
+START_CASH, GO_SALARY, JAIL_FINE = 15000, 750, 500
+AUCTION_START, AUCTION_STEP = 100, 100         # lowest opening bid / lowest raise in an auction
+AUCTION_ACTIONS = {"bid", "pass_bid", "mortgage", "sell"}     # all that is allowed while an auction runs (mortgage / sell = raise cash)
+TOKEN_COLORS = ["#D32F2F", "#2536B5", "#2E7D32", "#F2BE16", "#7B1FA2", "#F57C00",      # red, blue, green, yellow, purple, orange
+                "#5DE02A", "#EC6C9C", "#1A8AA0"]                                          # lime, pink, teal (extra choices)
 
 
 class GameError(Exception):
@@ -20,8 +23,9 @@ class GameError(Exception):
 
 
 class Game:
-    def __init__(self, players, seed=None, colors=None):
-        """players: list of (player_id, name). colors: optional {player_id: "#RRGGBB"} chosen in the lobby."""
+    def __init__(self, players, seed=None, colors=None, auction=True):
+        """players: list of (player_id, name). colors: optional {player_id: "#RRGGBB"} chosen in the lobby.
+        auction: False = a land that is not bought stays unowned (no auctions in this game)."""
         if not MIN_PLAYERS <= len(players) <= MAX_PLAYERS:
             raise GameError("need_players", min=MIN_PLAYERS, max=MAX_PLAYERS)
         self.rng = random.Random(seed)
@@ -36,16 +40,15 @@ class Game:
         self.doubles = 0
         self.extra = False         # rolled doubles: same player rolls again
         self.pending_buy = None
+        self.pending_draw = None               # "luck" / "fortune": the player landed there and must roll the dice for the card
         self.trade = None
+        self.auction_on = bool(auction)        # room / game setting: are auctions played at all?
+        self.auction = None                    # a declined property is sold to the highest bidder, see do_skip()
         self.winner = None
         self.creditor = None
         self.log = []
-        self.last_card = None                  # last Chance / Fortune card drawn (shown in the board centre)
+        self.last_card = None                  # last Luck / Fortune card drawn (shown in the board centre)
         self.events, self.event_seq = [], 0   # structured events, shown to ALL players as banners
-        self.chance = list(range(len(CHANCE)))
-        self.chest = list(range(len(CHEST)))
-        self.rng.shuffle(self.chance)
-        self.rng.shuffle(self.chest)
         self.say("start", name=self.cur()["id"])
 
     # ---------- helpers ----------
@@ -101,10 +104,10 @@ class Game:
             if s["houses"]:
                 return t["rents"][s["houses"]]
             return t["rents"][0] * (2 if self.monopoly(owner, t["group"]) else 1)
-        n = sum(1 for i in GROUPS[t["group"]] if self.owner_of(i) == owner)
-        if t["type"] == "station":
-            return 25 * 2 ** (n - 1)
-        return (10 if n == 2 else 4) * total
+        if t["type"] == "airport":
+            return AIRPORT_RENT_PER_POINT * total       # `total` = the visitor's extra roll, see airport_rent()
+        n = sum(1 for i in GROUPS[t["group"]] if self.owner_of(i) == owner)    # stations / utilities: own set only
+        return STATION_RENT * n
 
     # ---------- movement ----------
     def go_to_jail(self, p):
@@ -124,10 +127,12 @@ class Game:
         t = TILES[idx]
         self.say("arrive", name=p["id"], tile=idx)
         k = t["type"]
-        if k in ("property", "station", "utility"):
+        if k in ("property", "station", "utility", "airport"):
             s = self.props.get(idx)
             if s is None:
                 self.pending_buy = idx
+            elif s["owner"] != p["id"] and not s["mortgaged"] and k == "airport":
+                self.pending_draw = "airport"        # the visitor must roll the dice again: total x 100 is the rent
             elif s["owner"] != p["id"] and not s["mortgaged"]:
                 owner = self.get(s["owner"])
                 r = self.rent(idx, sum(self.dice))
@@ -136,40 +141,52 @@ class Game:
         elif k == "tax":
             self.pay(p, t["amount"])
             self.say("tax", name=p["id"], amt=t["amount"])
-        elif k in ("chance", "chest"):
-            self.draw(p, k)
+        elif k in ("luck", "fortune"):
+            self.pending_draw = k                # the player now chooses to roll the dice (do_roll_card)
+            self.last_card = None                # clear the highlight of the previous card on the board centre
         elif k == "gotojail":
             self.go_to_jail(p)
+        # START and JAIL (just visiting): nothing happens
 
     def draw(self, p, kind):
-        deck, cards = (self.chance, CHANCE) if kind == "chance" else (self.chest, CHEST)
-        ci = deck.pop(0)
-        deck.append(ci)
+        """Luck / Fortune tile: the player's two dice are rolled once more and the total (2..12) picks the line of the
+        card, exactly like the table printed on the board. Called from do_roll_card()."""
+        cards = LUCK if kind == "luck" else FORTUNE
+        self.dice = [self.rng.randint(1, 6), self.rng.randint(1, 6)]
+        self.roll_seq += 1                                   # clients tumble the dice again for this roll
+        roll = sum(self.dice)
+        ci = roll - 2
         c = cards[ci]
-        self.last_card = dict(deck=kind, ci=ci, pid=p["id"], text=c["text"], who=p["name"])   # text / who: Hindi fallback
-        self.say("card", "card", (p["id"],), name=p["id"], deck=kind, ci=ci)
+        self.last_card = dict(deck=kind, ci=ci, roll=roll, pid=p["id"], text=c["text"], who=p["name"])   # text / who: Hindi fallback
+        self.say("card", "card", (p["id"],), name=p["id"], deck=kind, ci=ci, roll=roll)
         k, v = c["kind"], c["value"]
-        if k == "jail_free":
-            p["cards"] += 1
-        elif k == "money":
+        if k == "money":
             if v < 0:
                 self.pay(p, -v)
             else:
                 p["money"] += v
-        elif k == "move_to":
-            self.move_to(p, v)
-        elif k == "move_rel":
-            self.move_to(p, (p["pos"] + v) % N, collect=False)
         elif k == "jail":
             self.go_to_jail(p)
-        elif k == "pay_each":
-            for o in self.alive():
-                if o is not p:
-                    self.pay(p, v, o)
         elif k == "collect_each":
             for o in self.alive():
                 if o is not p:
                     self.pay(o, v, p)
+            self.creditor = None
+        elif k == "collect_one":
+            others = [o for o in self.alive() if o is not p]
+            if others:
+                self.pay(max(others, key=lambda o: o["money"]), v, p)
+                self.creditor = None
+        elif k == "repairs":
+            per_house, per_hotel = v
+            cost = 0
+            for i in self.owned(p["id"]):
+                n = self.props[i]["houses"]
+                cost += per_hotel if n >= HOTEL else per_house * n
+            if cost:
+                self.pay(p, cost)
+        elif k == "holiday":
+            self.pay(p, v)                       # there is no Resort tile any more: the holiday is only paid for
 
     # ---------- actions ----------
     def act(self, pid, action, **kw):
@@ -181,6 +198,8 @@ class Game:
         fn = getattr(self, "do_" + action, None)
         if fn is None or action.startswith("_"):
             raise GameError("bad_move")
+        if self.auction and action not in AUCTION_ACTIONS:
+            raise GameError("auction_busy")
         fn(p, **kw)
 
     def _my_turn(self, p):
@@ -192,6 +211,7 @@ class Game:
         if self.phase != "roll":
             raise GameError("already_rolled")
         self.pending_buy = None
+        self.pending_draw = None
         self.dice = [self.rng.randint(1, 6), self.rng.randint(1, 6)]
         self.roll_seq += 1
         total, dbl = sum(self.dice), self.dice[0] == self.dice[1]
@@ -224,6 +244,32 @@ class Game:
         p["pos"] = newpos
         self.land(p)
 
+    def do_roll_card(self, p):
+        """The player on a Luck / Fortune tile rolls the dice; the total decides the line that applies."""
+        self._my_turn(p)
+        kind = self.pending_draw
+        if kind is None:
+            raise GameError("no_card_roll")
+        self.pending_draw = None
+        if kind == "airport":
+            return self.airport_rent(p)
+        self.draw(p, kind)
+
+    def airport_rent(self, p):
+        """The player on somebody else's Airport rolls both dice again; the total x 100 is the rent. (Doubles here give
+        no extra turn.) Nothing is paid if the Airport was mortgaged or changed hands in the meantime."""
+        idx = p["pos"]
+        s = self.props.get(idx)
+        if TILES[idx]["type"] != "airport" or s is None or s["owner"] == p["id"] or s["mortgaged"]:
+            return
+        owner = self.get(s["owner"])
+        self.dice = [self.rng.randint(1, 6), self.rng.randint(1, 6)]
+        self.roll_seq += 1                                   # clients tumble the dice again for this roll
+        self.say("roll", name=p["id"], d1=self.dice[0], d2=self.dice[1])
+        r = self.rent(idx, sum(self.dice))
+        self.pay(p, r, owner)
+        self.say("rent", "rent", (p["id"], owner["id"]), name=p["id"], owner=owner["id"], tile=idx, amt=r)
+
     def do_buy(self, p):
         self._my_turn(p)
         idx = self.pending_buy
@@ -237,16 +283,100 @@ class Game:
         self.pending_buy = None
         self.say("buy", "buy", (p["id"],), name=p["id"], tile=idx, price=price)
 
+    # ---- auction: the player on an unowned property declines to buy it (Skip, or End turn) ----
+    def do_skip(self, p):
+        """Decline to buy at the printed price. The property is auctioned: the other players (and the decliner) bid in
+        turn, clockwise, each one raises the bid or passes. The last bidder left pays his bid and gets the property;
+        if everybody passes it stays for sale. Players who cannot afford the next bid pass automatically."""
+        self._my_turn(p)
+        idx = self.pending_buy
+        if idx is None:
+            raise GameError("nothing_to_buy")
+        self.pending_buy = None
+        if not self.auction_on:                   # auctions are switched off for this game: the land just stays unowned
+            self.say("no_buy", name=p["id"], tile=idx)
+            return
+        n = len(self.players)
+        order = [self.players[(self.turn + k) % n]["id"] for k in range(1, n + 1)]      # decliner bids last
+        order = [pid for pid in order if not self.get(pid)["bankrupt"]]
+        self.auction = dict(tile=idx, bid=0, leader=None, order=order, passed=[], bidder=None)
+        self.say("auction_start", "auction", (p["id"],), name=p["id"], tile=idx, price=TILES[idx]["price"])
+        self._auction_next(None)
+
+    def auction_min(self):
+        """Lowest bid allowed right now."""
+        a = self.auction
+        return a["bid"] + AUCTION_STEP if a["bid"] else AUCTION_START
+
+    def _auction_next(self, after):
+        """Pick who bids next (the player after `after` in the bidding order); end the auction when nobody is left."""
+        a = self.auction
+        order, need = a["order"], self.auction_min()
+        for pid in order:                                    # cannot pay the next bid: out, without being asked
+            if pid not in a["passed"] and pid != a["leader"] and self.get(pid)["money"] < need:
+                a["passed"].append(pid)
+        active = [pid for pid in order if pid not in a["passed"] and pid != a["leader"]]
+        if not active:
+            return self._auction_end()
+        start = 0 if after is None else order.index(after) + 1
+        for k in range(len(order)):
+            pid = order[(start + k) % len(order)]
+            if pid in active:
+                a["bidder"] = pid
+                return
+
+    def _auction_end(self):
+        a, self.auction = self.auction, None
+        idx = a["tile"]
+        if a["leader"]:
+            w = self.get(a["leader"])
+            w["money"] -= a["bid"]
+            self.props[idx] = dict(owner=w["id"], houses=0, mortgaged=False)
+            self.say("auction_won", "buy", (w["id"],), name=w["id"], tile=idx, price=a["bid"])
+        else:
+            self.say("auction_none", tile=idx)
+
+    def _bidder(self, p):
+        if not self.auction:
+            raise GameError("no_auction")
+        if self.auction["bidder"] != p["id"]:
+            raise GameError("not_bidder")
+        return self.auction
+
+    def do_bid(self, p, amount):
+        a = self._bidder(p)
+        if not isinstance(amount, int) or isinstance(amount, bool):
+            raise GameError("bad_bid")
+        low = self.auction_min()
+        if amount < low:
+            raise GameError("bid_low", min=low)
+        if amount > p["money"]:
+            raise GameError("poor")
+        a["bid"], a["leader"] = amount, p["id"]
+        self.say("auction_bid", name=p["id"], tile=a["tile"], amt=amount)
+        self._auction_next(p["id"])
+
+    def do_pass_bid(self, p):
+        a = self._bidder(p)
+        a["passed"].append(p["id"])
+        self.say("auction_pass", name=p["id"])
+        self._auction_next(p["id"])
+
     def do_end_turn(self, p):
         self._my_turn(p)
         if self.phase != "act":
             raise GameError("roll_first")
+        if self.pending_draw:
+            raise GameError("card_roll_first")
+        if self.pending_buy is not None and self.auction_on:    # ending the turn without buying = declining: auction
+            return self.do_skip(p)
         if p["money"] < 0:
             raise GameError("in_debt")
         self._advance()
 
     def _advance(self):
         self.pending_buy = None
+        self.pending_draw = None
         p = self.cur()
         if self.extra and not p["in_jail"] and not p["bankrupt"]:
             self.extra, self.phase = False, "roll"
@@ -296,15 +426,19 @@ class Game:
         grp = self._group_states(t["group"])
         if any(g["mortgaged"] for g in grp):
             raise GameError("mortgaged_group")
-        if s["houses"] >= 5:
+        if s["houses"] >= HOTEL:
             raise GameError("hotel_exists")
         if s["houses"] > min(g["houses"] for g in grp):
             raise GameError("build_even")
         if p["money"] < t["house_cost"]:
             raise GameError("poor")
         p["money"] -= t["house_cost"]
-        s["houses"] += 1
-        self.say("build", "build", (p["id"],), name=p["id"], tile=tile, n=s["houses"])
+        # 3 houses, then the hotel (a saved game from before may still have 4 houses: that also goes to the hotel)
+        s["houses"] = HOTEL if s["houses"] >= MAX_HOUSES else s["houses"] + 1
+        if s["houses"] == HOTEL:
+            self.say("build_hotel", "build", (p["id"],), name=p["id"], tile=tile)
+        else:
+            self.say("build", "build", (p["id"],), name=p["id"], tile=tile, n=s["houses"])
 
     def do_sell(self, p, tile):
         t, s = self._own(p, tile)
@@ -312,9 +446,10 @@ class Game:
             raise GameError("no_house")
         if s["houses"] < max(g["houses"] for g in self._group_states(t["group"])):
             raise GameError("sell_even")
-        s["houses"] -= 1
+        was_hotel = s["houses"] == HOTEL
+        s["houses"] = MAX_HOUSES if was_hotel else s["houses"] - 1      # selling the hotel leaves 3 houses
         p["money"] += t["house_cost"] // 2
-        self.say("sell", "sell", (p["id"],), name=p["id"], tile=tile)
+        self.say("sell_hotel" if was_hotel else "sell", "sell", (p["id"],), name=p["id"], tile=tile)
 
     def do_mortgage(self, p, tile):
         t, s = self._own(p, tile)
@@ -406,8 +541,50 @@ class Game:
         self.say("trade_cancel")
 
     # ---------- state for clients ----------
+    # ---------- save / resume (computer games) ----------
+    SAVE_VERSION = 2
+
+    def to_dict(self):
+        """Everything needed to continue this game later (JSON-safe), including the dice / card-shuffle generator, so a
+        resumed game plays on exactly as the original would have."""
+        rs = self.rng.getstate()
+        return dict(v=self.SAVE_VERSION, players=self.players, props={str(k): v for k, v in self.props.items()},
+                    turn=self.turn, phase=self.phase, dice=self.dice, roll_seq=self.roll_seq, doubles=self.doubles,
+                    extra=self.extra, pending_buy=self.pending_buy, pending_draw=self.pending_draw, trade=self.trade, winner=self.winner,
+                    auction=self.auction, auction_on=self.auction_on, creditor=self.creditor, log=self.log, last_card=self.last_card, events=self.events,
+                    event_seq=self.event_seq,
+                    rng=[rs[0], list(rs[1]), rs[2]])
+
+    @classmethod
+    def from_dict(cls, d):
+        """Rebuild a game from to_dict() data (after a JSON round trip). Raises ValueError if the data is unusable."""
+        try:
+            if d.get("v") != cls.SAVE_VERSION:
+                raise ValueError("unknown save version")
+            g = cls.__new__(cls)
+            g.players = [dict(p) for p in d["players"]]
+            if not MIN_PLAYERS <= len(g.players) <= MAX_PLAYERS:
+                raise ValueError("bad player count")
+            g.props = {int(k): dict(v) for k, v in d["props"].items()}
+            g.turn = int(d["turn"])
+            if not 0 <= g.turn < len(g.players):
+                raise ValueError("bad turn")
+            g.phase, g.dice, g.roll_seq, g.doubles = d["phase"], list(d["dice"]), d["roll_seq"], d["doubles"]
+            g.extra, g.pending_buy, g.trade, g.winner = d["extra"], d["pending_buy"], d["trade"], d["winner"]
+            g.pending_draw = d.get("pending_draw")              # saves from before this rule have none
+            g.auction = d.get("auction")                        # same for the auction
+            g.auction_on = d.get("auction_on", True)
+            g.creditor, g.log, g.last_card = d["creditor"], list(d["log"]), d["last_card"]
+            g.events, g.event_seq = list(d["events"]), d["event_seq"]
+            rs = d["rng"]
+            g.rng = random.Random()
+            g.rng.setstate((rs[0], tuple(rs[1]), rs[2]))
+            return g
+        except (KeyError, TypeError, AttributeError) as e:
+            raise ValueError(f"bad save data: {e}")
+
     def state(self):
         return dict(players=self.players, props={str(k): v for k, v in self.props.items()},
                     turn=self.cur()["id"], phase=self.phase, dice=self.dice, roll_seq=self.roll_seq,
-                    pending_buy=self.pending_buy, trade=self.trade, winner=self.winner,
-                    log=self.log[-12:], events=self.events[-8:], last_card=self.last_card)
+                    pending_buy=self.pending_buy, pending_draw=self.pending_draw, trade=self.trade, auction=self.auction, auction_on=self.auction_on,
+                    winner=self.winner, log=self.log[-12:], events=self.events[-8:], last_card=self.last_card)
