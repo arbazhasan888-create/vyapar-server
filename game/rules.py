@@ -8,7 +8,7 @@ from . import texts
 MIN_PLAYERS, MAX_PLAYERS = 2, 6
 START_CASH, GO_SALARY, JAIL_FINE = 15000, 750, 500
 AUCTION_START, AUCTION_STEP = 100, 100         # lowest opening bid / lowest raise in an auction
-AUCTION_ACTIONS = {"bid", "pass_bid", "mortgage", "sell"}     # all that is allowed while an auction runs (mortgage / sell = raise cash)
+AUCTION_ACTIONS = {"bid", "pass_bid", "mortgage", "sell", "leave"}     # all that is allowed while an auction runs (mortgage / sell = raise cash)
 TOKEN_COLORS = ["#D32F2F", "#2536B5", "#2E7D32", "#F2BE16", "#7B1FA2", "#F57C00",      # red, blue, green, yellow, purple, orange
                 "#5DE02A", "#EC6C9C", "#1A8AA0"]                                          # lime, pink, teal (extra choices)
 
@@ -30,7 +30,7 @@ class Game:
             raise GameError("need_players", min=MIN_PLAYERS, max=MAX_PLAYERS)
         self.rng = random.Random(seed)
         self.players = [dict(id=pid, name=name, money=START_CASH, pos=0, in_jail=False,
-                             jail_turns=0, cards=0, bankrupt=False, color=(colors or {}).get(pid) or TOKEN_COLORS[i])
+                             jail_turns=0, cards=0, bankrupt=False, left=False, color=(colors or {}).get(pid) or TOKEN_COLORS[i])
                         for i, (pid, name) in enumerate(players)]
         self.props = {}            # tile index -> {owner, houses, mortgaged}
         self.turn = 0
@@ -38,7 +38,7 @@ class Game:
         self.dice = [0, 0]
         self.roll_seq = 0                      # +1 on every roll, so clients can animate even when the dice repeat
         self.doubles = 0
-        self.extra = False         # rolled doubles: same player rolls again
+        self.extra = False         # unused now: doubles no longer give an extra turn (kept so saved games still load)
         self.pending_buy = None
         self.pending_draw = None               # "luck" / "fortune": the player landed there and must roll the dice for the card
         self.trade = None
@@ -167,6 +167,8 @@ class Game:
                 p["money"] += v
         elif k == "jail":
             self.go_to_jail(p)
+        elif k == "jail_card":
+            p["cards"] += v                      # kept until used (do_use_card) or traded
         elif k == "collect_each":
             for o in self.alive():
                 if o is not p:
@@ -229,13 +231,7 @@ class Game:
                 self.pay(p, JAIL_FINE)
                 p["in_jail"] = False
                 self.say("jail_auto", amt=JAIL_FINE)
-        elif dbl:
-            self.doubles += 1
-            if self.doubles == 3:
-                self.doubles = 0
-                self.go_to_jail(p)
-                return
-            self.extra = True
+        # doubles give NO extra turn (one roll per turn); a double only frees a player from jail (above)
         old = p["pos"]
         newpos = (old + total) % N
         if newpos < old:
@@ -475,6 +471,8 @@ class Game:
     def do_bankrupt(self, p):
         if p["money"] >= 0:
             raise GameError("not_in_debt")
+        if self.trade and p["id"] in (self.trade["frm"], self.trade["to"]):
+            self.trade = None                                # a deal with a player who goes bankrupt is off
         heir = self.get(self.creditor) if self.creditor and self.creditor != p["id"] else None
         for i in self.owned(p["id"]):
             s = self.props[i]
@@ -495,26 +493,64 @@ class Game:
         if self.cur() is p:
             self._advance()
 
+    def do_leave(self, p):
+        """The player exits the running game on purpose (any time, even when it is not his turn). He is out like a
+        bankrupt player, tagged `left`, but his lands go back to the bank (nobody inherits them). If only one player
+        is still in, that player wins."""
+        if self.trade and p["id"] in (self.trade["frm"], self.trade["to"]):
+            self.trade = None
+        for i in self.owned(p["id"]):
+            del self.props[i]
+        a = self.auction
+        if a:                                                # he drops out of a running auction
+            if a["leader"] == p["id"]:
+                a["leader"], a["bid"] = None, 0
+            if p["id"] not in a["passed"]:
+                a["passed"].append(p["id"])
+        p.update(bankrupt=True, left=True, money=0, cards=0)
+        self.creditor = None
+        self.say("left", "bankrupt", (p["id"],), name=p["id"])
+        left = self.alive()
+        if len(left) == 1:
+            self.auction = None
+            self.winner = left[0]["id"]
+            self.say("win", "win", (left[0]["id"],), name=left[0]["id"])
+            return
+        if self.auction and a["bidder"] == p["id"]:
+            self._auction_next(p["id"])
+        if self.cur() is p:
+            self.extra = False
+            self._advance()
+
     # ---- trade ----
-    def _check_side(self, owner, tiles, cash):
+    def _check_side(self, owner, tiles, cash, cards=0):
         if cash < 0 or cash > owner["money"]:
             raise GameError("owner_poor", name=owner["name"])
+        if cards < 0 or cards > owner["cards"]:
+            raise GameError("trade_no_card", name=owner["name"])
+        if len(set(tiles)) != len(tiles):
+            raise GameError("bad_move")
         for i in tiles:
             t, s = self._own(owner, i)
             if t["type"] == "property" and any(g["houses"] for g in self._group_states(t["group"])):
                 raise GameError("trade_houses")
 
-    def do_propose_trade(self, p, to, give_tiles=(), give_cash=0, get_tiles=(), get_cash=0):
+    def do_propose_trade(self, p, to, give_tiles=(), give_cash=0, get_tiles=(), get_cash=0, give_cards=0, get_cards=0):
         other = self.get(to)
         if other is p or other["bankrupt"]:
             raise GameError("wrong_player")
         if self.trade:
             raise GameError("trade_pending")
-        give_tiles, get_tiles = list(give_tiles), list(get_tiles)
-        self._check_side(p, give_tiles, give_cash)
-        self._check_side(other, get_tiles, get_cash)
-        self.trade = dict(frm=p["id"], to=to, give_tiles=give_tiles, give_cash=give_cash,
-                          get_tiles=get_tiles, get_cash=get_cash)
+        for v in (give_cash, get_cash, give_cards, get_cards):
+            if not isinstance(v, int) or isinstance(v, bool):
+                raise GameError("bad_move")
+        give_tiles, get_tiles = [int(i) for i in give_tiles], [int(i) for i in get_tiles]
+        if not (give_tiles or get_tiles or give_cash or get_cash or give_cards or get_cards):
+            raise GameError("trade_empty")
+        self._check_side(p, give_tiles, give_cash, give_cards)
+        self._check_side(other, get_tiles, get_cash, get_cards)
+        self.trade = dict(frm=p["id"], to=to, give_tiles=give_tiles, give_cash=give_cash, give_cards=give_cards,
+                          get_tiles=get_tiles, get_cash=get_cash, get_cards=get_cards)
         self.say("trade_offer", name=p["id"], other=other["id"])
 
     def do_accept_trade(self, p):
@@ -522,14 +558,17 @@ class Game:
         if not tr or tr["to"] != p["id"]:
             raise GameError("no_trade_for_you")
         a = self.get(tr["frm"])
-        self._check_side(a, tr["give_tiles"], tr["give_cash"])
-        self._check_side(p, tr["get_tiles"], tr["get_cash"])
+        gc, tc = tr.get("give_cards", 0), tr.get("get_cards", 0)        # saves from before cards could be traded have none
+        self._check_side(a, tr["give_tiles"], tr["give_cash"], gc)
+        self._check_side(p, tr["get_tiles"], tr["get_cash"], tc)
         for i in tr["give_tiles"]:
             self.props[i]["owner"] = p["id"]
         for i in tr["get_tiles"]:
             self.props[i]["owner"] = a["id"]
         a["money"] += tr["get_cash"] - tr["give_cash"]
         p["money"] += tr["give_cash"] - tr["get_cash"]
+        a["cards"] += tc - gc
+        p["cards"] += gc - tc
         self.trade = None
         self.say("trade_done", "trade", (a["id"], p["id"]), p1=a["id"], p2=p["id"])
 

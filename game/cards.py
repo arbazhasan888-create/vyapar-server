@@ -11,6 +11,7 @@ kind / value:
     repairs       value = (per house, per hotel), paid to the bank
     holiday       pay `value` to the bank
     jail          go to jail
+    jail_card     the player keeps a Get Out of Jail Free card (use it, or trade it)
 """
 
 LUCK = [
@@ -21,7 +22,7 @@ LUCK = [
     dict(text="आपका जन्मदिन है, हर खिलाड़ी से ₹250 लो।", en="It is your birthday, collect ₹250 from each player.", kind="collect_each", value=250),
     dict(text="पुलिस ने जुर्माना किया, बैंक को ₹500 दो।", en="Fined by Police, pay ₹500 to the bank.", kind="money", value=-500),
     dict(text="शेयरों पर लाभांश मिला, बैंक से ₹1000 लो।", en="Receive dividend on Shares, collect ₹1000 from the bank.", kind="money", value=1000),
-    dict(text="इलाज का बिल, बैंक को ₹750 दो।", en="Pay Medical Bill ₹750 to the bank.", kind="money", value=-750),
+    dict(text="जेल से छुट्टी का कार्ड मिला! इसे संभालकर रखो।", en="Get Out of Jail Free card! Keep it until you need it.", kind="jail_card", value=1),
     dict(text="कॉपीराइट उल्लंघन पर मुकदमा, किसी एक खिलाड़ी से ₹750 लो।", en="Sue for copyright infringement, collect ₹750 from any player.", kind="collect_one", value=750),
     dict(text="जेल जाओ।", en="Go to Jail.", kind="jail", value=0),
     dict(text="दिया हुआ कर्ज़ वापस मिला, बैंक से ₹1250 लो।", en="Loan given received back, collect ₹1250 from the bank.", kind="money", value=1250),
@@ -36,6 +37,6 @@ FORTUNE = [
     dict(text="मरम्मत: हर मकान के ₹50, हर होटल के ₹100 दो।", en="Make repairs: Each House ₹50, Each Hotel ₹100.", kind="repairs", value=(50, 100)),
     dict(text="त्योहार बोनस, बैंक से ₹1000 लो।", en="Receive Festival Bonus ₹1000 from the bank.", kind="money", value=1000),
     dict(text="बीमा प्रीमियम, बैंक को ₹500 दो।", en="Pay Insurance Premium ₹500 to the bank.", kind="money", value=-500),
-    dict(text="फिक्स्ड डिपॉजिट पर ब्याज, बैंक से ₹750 लो।", en="Interest earned on Fixed Deposit, Collect ₹750 from the bank.", kind="money", value=750),
+    dict(text="जेल से छुट्टी का कार्ड मिला! जेल जाओ तो इस्तेमाल करो।", en="Get Out of Jail Free card! Use it if you land in jail.", kind="jail_card", value=1),
     dict(text="छुट्टी पर जाओ, बैंक को ₹3000 दो।", en="Go to a Holiday, pay ₹3000 to the bank.", kind="holiday", value=3000),
 ]

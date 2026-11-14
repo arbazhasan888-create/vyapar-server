@@ -48,9 +48,50 @@ def _auction_step(g, rng):
     return "bid"
 
 
+JAIL_CARD_VALUE = 600
+
+
+def _tile_value(g, pid, idx, receiving):
+    """What a land is worth to the computer player `pid`: the printed price (a mortgaged land counts less); more when
+    it completes a colour set for the computer; when it is given away, more when it breaks the computer's own set."""
+    t = TILES[idx]
+    v = float(t["price"]) * (0.6 if g.props[idx]["mortgaged"] else 1.0)
+    if t["type"] == "property":
+        if receiving and _completes_group(g, pid, idx):
+            v *= 2.2
+        elif not receiving:
+            if any(g.owner_of(i) == pid for i, x in enumerate(TILES) if x.get("group") == t["group"] and i != idx):
+                v *= 1.3                                  # it is part of a set the computer is collecting
+            for o in g.alive():                           # the human would get a full set: very unwilling
+                if o["id"] != pid and _completes_group(g, o["id"], idx):
+                    v *= 2.5
+                    break
+    return v
+
+
+def _trade_reply(g, rng):
+    """The computer is asked to accept or refuse the pending trade. It accepts when what it gets is worth clearly
+    more than what it gives (a small margin, a little different from bot to bot) and it keeps a cash cushion."""
+    tr = g.trade
+    pid = tr["to"]
+    p = g.get(pid)
+    mine = random.Random(f"trade:{pid}:{g.roll_seq}:{tr['frm']}")
+    gets = sum(_tile_value(g, pid, i, True) for i in tr["give_tiles"]) + tr["give_cash"] \
+        + JAIL_CARD_VALUE * tr.get("give_cards", 0)
+    gives = sum(_tile_value(g, pid, i, False) for i in tr["get_tiles"]) + tr["get_cash"] \
+        + JAIL_CARD_VALUE * tr.get("get_cards", 0)
+    ok = gets >= gives * mine.uniform(1.05, 1.25) and p["money"] - tr["get_cash"] + tr["give_cash"] >= 1000
+    if ok and _try(g, pid, "accept_trade"):
+        return "accept_trade"
+    g.act(pid, "reject_trade")
+    return "reject_trade"
+
+
 def bot_step(g, rng):
     if g.auction:                                        # an auction is running: the bidder acts, whoever's turn it is
         return _auction_step(g, rng)
+    if g.trade and g.trade["to"].startswith("bot"):      # somebody offered the computer a deal: answer it first
+        return _trade_reply(g, rng)
     p = g.cur()
     pid = p["id"]
 
