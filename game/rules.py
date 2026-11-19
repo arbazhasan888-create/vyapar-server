@@ -13,6 +13,15 @@ TOKEN_COLORS = ["#D32F2F", "#2536B5", "#2E7D32", "#F2BE16", "#7B1FA2", "#F57C00"
                 "#5DE02A", "#EC6C9C", "#1A8AA0"]                                          # lime, pink, teal (extra choices)
 
 
+STAT_KEYS = ("rent_in", "rent_out", "lands", "houses", "jail", "turns")
+
+
+def new_stats():
+    """Per-player match statistics shown on the result screen (rent collected / paid, lands bought, houses built,
+    times sent to jail, turns played)."""
+    return {k: 0 for k in STAT_KEYS}
+
+
 class GameError(Exception):
     """Illegal move. `key` + `params` let every app show the message in the player's language (see texts.ERR);
     str(error) is the Hindi text, kept for old callers / tests."""
@@ -23,14 +32,16 @@ class GameError(Exception):
 
 
 class Game:
-    def __init__(self, players, seed=None, colors=None, auction=True):
+    def __init__(self, players, seed=None, colors=None, auction=True, hints=True):
         """players: list of (player_id, name). colors: optional {player_id: "#RRGGBB"} chosen in the lobby.
-        auction: False = a land that is not bought stays unowned (no auctions in this game)."""
+        auction: False = a land that is not bought stays unowned (no auctions in this game).
+        hints: False = the Hint button and the rent warning are switched off for everybody in this game."""
         if not MIN_PLAYERS <= len(players) <= MAX_PLAYERS:
             raise GameError("need_players", min=MIN_PLAYERS, max=MAX_PLAYERS)
         self.rng = random.Random(seed)
         self.players = [dict(id=pid, name=name, money=START_CASH, pos=0, in_jail=False,
-                             jail_turns=0, cards=0, bankrupt=False, left=False, color=(colors or {}).get(pid) or TOKEN_COLORS[i])
+                             jail_turns=0, cards=0, bankrupt=False, left=False, color=(colors or {}).get(pid) or TOKEN_COLORS[i],
+                             stats=new_stats())
                         for i, (pid, name) in enumerate(players)]
         self.props = {}            # tile index -> {owner, houses, mortgaged}
         self.turn = 0
@@ -43,6 +54,7 @@ class Game:
         self.pending_draw = None               # "luck" / "fortune": the player landed there and must roll the dice for the card
         self.trade = None
         self.auction_on = bool(auction)        # room / game setting: are auctions played at all?
+        self.hints_on = bool(hints)            # room / game setting: is the Hint button usable at all?
         self.auction = None                    # a declined property is sold to the highest bidder, see do_skip()
         self.winner = None
         self.creditor = None
@@ -68,6 +80,11 @@ class Game:
 
     def cur(self):
         return self.players[self.turn]
+
+    def stat(self, p, key, n=1):
+        """Add n to one of the player's match statistics (saves from before statistics existed get them on first use)."""
+        st = p.setdefault("stats", new_stats())
+        st[key] = st.get(key, 0) + n
 
     def get(self, pid):
         for p in self.players:
@@ -112,6 +129,7 @@ class Game:
     # ---------- movement ----------
     def go_to_jail(self, p):
         p["pos"], p["in_jail"], p["jail_turns"] = JAIL_POS, True, 0
+        self.stat(p, "jail")
         self.extra = False
         self.say("jail", "jail", (p["id"],), name=p["id"])
 
@@ -137,6 +155,8 @@ class Game:
                 owner = self.get(s["owner"])
                 r = self.rent(idx, sum(self.dice))
                 self.pay(p, r, owner)
+                self.stat(p, "rent_out", r)
+                self.stat(owner, "rent_in", r)
                 self.say("rent", "rent", (p["id"], owner["id"]), name=p["id"], owner=owner["id"], tile=idx, amt=r)
         elif k == "tax":
             self.pay(p, t["amount"])
@@ -214,6 +234,7 @@ class Game:
             raise GameError("already_rolled")
         self.pending_buy = None
         self.pending_draw = None
+        self.stat(p, "turns")
         self.dice = [self.rng.randint(1, 6), self.rng.randint(1, 6)]
         self.roll_seq += 1
         total, dbl = sum(self.dice), self.dice[0] == self.dice[1]
@@ -264,6 +285,8 @@ class Game:
         self.say("roll", name=p["id"], d1=self.dice[0], d2=self.dice[1])
         r = self.rent(idx, sum(self.dice))
         self.pay(p, r, owner)
+        self.stat(p, "rent_out", r)
+        self.stat(owner, "rent_in", r)
         self.say("rent", "rent", (p["id"], owner["id"]), name=p["id"], owner=owner["id"], tile=idx, amt=r)
 
     def do_buy(self, p):
@@ -277,6 +300,7 @@ class Game:
         p["money"] -= price
         self.props[idx] = dict(owner=p["id"], houses=0, mortgaged=False)
         self.pending_buy = None
+        self.stat(p, "lands")
         self.say("buy", "buy", (p["id"],), name=p["id"], tile=idx, price=price)
 
     # ---- auction: the player on an unowned property declines to buy it (Skip, or End turn) ----
@@ -328,6 +352,7 @@ class Game:
             w = self.get(a["leader"])
             w["money"] -= a["bid"]
             self.props[idx] = dict(owner=w["id"], houses=0, mortgaged=False)
+            self.stat(w, "lands")
             self.say("auction_won", "buy", (w["id"],), name=w["id"], tile=idx, price=a["bid"])
         else:
             self.say("auction_none", tile=idx)
@@ -431,6 +456,7 @@ class Game:
         p["money"] -= t["house_cost"]
         # 3 houses, then the hotel (a saved game from before may still have 4 houses: that also goes to the hotel)
         s["houses"] = HOTEL if s["houses"] >= MAX_HOUSES else s["houses"] + 1
+        self.stat(p, "houses")
         if s["houses"] == HOTEL:
             self.say("build_hotel", "build", (p["id"],), name=p["id"], tile=tile)
         else:
@@ -590,7 +616,7 @@ class Game:
         return dict(v=self.SAVE_VERSION, players=self.players, props={str(k): v for k, v in self.props.items()},
                     turn=self.turn, phase=self.phase, dice=self.dice, roll_seq=self.roll_seq, doubles=self.doubles,
                     extra=self.extra, pending_buy=self.pending_buy, pending_draw=self.pending_draw, trade=self.trade, winner=self.winner,
-                    auction=self.auction, auction_on=self.auction_on, creditor=self.creditor, log=self.log, last_card=self.last_card, events=self.events,
+                    auction=self.auction, auction_on=self.auction_on, hints_on=self.hints_on, creditor=self.creditor, log=self.log, last_card=self.last_card, events=self.events,
                     event_seq=self.event_seq,
                     rng=[rs[0], list(rs[1]), rs[2]])
 
@@ -613,6 +639,7 @@ class Game:
             g.pending_draw = d.get("pending_draw")              # saves from before this rule have none
             g.auction = d.get("auction")                        # same for the auction
             g.auction_on = d.get("auction_on", True)
+            g.hints_on = d.get("hints_on", True)               # saves from before this setting: hints on
             g.creditor, g.log, g.last_card = d["creditor"], list(d["log"]), d["last_card"]
             g.events, g.event_seq = list(d["events"]), d["event_seq"]
             rs = d["rng"]
@@ -625,5 +652,5 @@ class Game:
     def state(self):
         return dict(players=self.players, props={str(k): v for k, v in self.props.items()},
                     turn=self.cur()["id"], phase=self.phase, dice=self.dice, roll_seq=self.roll_seq,
-                    pending_buy=self.pending_buy, pending_draw=self.pending_draw, trade=self.trade, auction=self.auction, auction_on=self.auction_on,
+                    pending_buy=self.pending_buy, pending_draw=self.pending_draw, trade=self.trade, auction=self.auction, auction_on=self.auction_on, hints_on=self.hints_on,
                     winner=self.winner, log=self.log[-12:], events=self.events[-8:], last_card=self.last_card)

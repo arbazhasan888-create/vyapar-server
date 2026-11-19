@@ -24,7 +24,8 @@ GROUP_COLORS = {
 }
 MAX_HOUSES = 3                      # a city takes at most 3 houses; the next building is the hotel
 HOTEL = 5                           # value of `houses` that means "hotel" (the levels are 0, 1, 2, 3 and HOTEL)
-RENT_MULT = [1, 5, 15, 35, 50, 70]  # index = `houses`: 0..3 houses, 5 = hotel (index 4 is not used any more)
+RENT_MULT = [1, 2, 3, 4, 4, 10]    # x base rent. index = `houses`: 0..3 houses, 5 = hotel (index 4 is not used any more)
+BUILD_COST_FACTOR = 0.6             # a house / the hotel costs this share of the old price (price / 2): about 30% of the land price
 STATION_RENT = 500                  # rent of a station / utility per owned tile of the SAME set: 500 / 1000 / 1500 for 1 / 2 / 3
 AIRPORT_RENT_PER_POINT = 100        # Airport: the visitor rolls the two dice again and pays (dice total) x this
 TAX_AMOUNT = 750
@@ -33,7 +34,7 @@ TAX_AMOUNT = 750
 def _prop(hi, en, price, group, idx):
     base = max(2, price // 12)
     return dict(type="property", name=hi, en=en, price=price, group=group, img=_img(en), full=True,
-                rents=[base * m for m in RENT_MULT], house_cost=(price // 100) * 50)
+                rents=[base * m for m in RENT_MULT], house_cost=int(round((price // 100) * 50 * BUILD_COST_FACTOR / 50)) * 50)
 
 
 def _other(kind, hi, en, **kw):

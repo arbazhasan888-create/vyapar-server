@@ -35,8 +35,9 @@ def purge_rooms():
 
 
 class Room:
-    def __init__(self, code, max_players, auction=True):
+    def __init__(self, code, max_players, auction=True, hints=False):
         self.code, self.max, self.auction = code, max_players, auction      # auction: room setting chosen by the creator
+        self.hints = hints                                                   # hints: room setting (the app now always sends 0)
         self.members = {}      # pid -> {"name", "ws"}
         self.host = None
         self.colors = {}        # pid -> token colour chosen in the lobby (host can change anyone's)
@@ -46,7 +47,7 @@ class Room:
         self.last_voice = {}    # pid -> time of the last voice message (flood guard)
 
     def lobby(self):
-        return dict(type="lobby", code=self.code, host=self.host, max=self.max, auction=self.auction,
+        return dict(type="lobby", code=self.code, host=self.host, max=self.max, auction=self.auction, hints=self.hints,
                     players=[dict(id=k, name=v["name"], color=self.colors.get(k)) for k, v in self.members.items()])
 
     def start_msg(self):
@@ -76,7 +77,7 @@ def health():
 
 
 @app.post("/create")
-def create(max_players: int = 4, auction: bool = True):
+def create(max_players: int = 4, auction: bool = True, hints: bool = False):
     purge_rooms()
     if not MIN_PLAYERS <= max_players <= MAX_PLAYERS:
         raise HTTPException(400, f"max_players must be {MIN_PLAYERS}-{MAX_PLAYERS}")
@@ -85,7 +86,7 @@ def create(max_players: int = 4, auction: bool = True):
         code = "".join(random.choice(alphabet) for _ in range(5))
         if code not in rooms:
             break
-    rooms[code] = Room(code, max_players, auction)
+    rooms[code] = Room(code, max_players, auction, hints)
     return {"code": code}
 
 
@@ -137,7 +138,7 @@ async def ws_endpoint(ws: WebSocket, code: str, pid: str, name: str = "खिल
                 elif len(room.members) < MIN_PLAYERS:
                     await ws.send_json(err("at_least", min=MIN_PLAYERS))
                 elif not room.game:
-                    room.game = Game([(k, v["name"]) for k, v in room.members.items()], colors=room.colors, auction=room.auction)
+                    room.game = Game([(k, v["name"]) for k, v in room.members.items()], colors=room.colors, auction=room.auction, hints=room.hints)
                     await room.broadcast(room.start_msg())
             elif kind == "set_color":
                 target, color = data.get("pid"), data.get("color")
